@@ -1,181 +1,309 @@
-# 修复版Whisper模型 - 无需FFmpeg依赖
-
 import whisper
 import os
 import logging
-from typing import Optional, Dict, Any
+import torch
 import numpy as np
-import wave
+import cv2
+from typing import Optional, Dict, Any, List
+from transformers import VisionEncoderDecoderModel, ViTImageProcessor, GPT2Tokenizer
+
+# 导入视频处理器
+from utils.video_processor import video_processor  # 绝对导入，直接从根目录找 utils
 
 logger = logging.getLogger(__name__)
 
 class WhisperModel:
     def __init__(self, model_name: str = "base", device: str = "cpu"):
-        """
-        初始化Whisper模型
-        
-        Args:
-            model_name: 模型名称 (tiny, base, small, medium, large)
-            device: 运行设备 (cpu, cuda)
-        """
         self.model_name = model_name
-        self.device = device
+        self.whisper_device = device
         self.model = None
+        self.vit_gpt2_model = None
+        self.vit_processor = None
+        self.gpt2_tokenizer = None
+        self.vlm_device = None
+
         self.load_model()
-    
+        self.load_vit_gpt2_model()
+
     def load_model(self):
-        """加载Whisper模型"""
         try:
-            logger.info(f"正在加载Whisper模型: {self.model_name}")
-            self.model = whisper.load_model(self.model_name, device=self.device)
-            logger.info(f"Whisper模型 {self.model_name} 加载成功")
+            logger.info(f"Loading Whisper model: {self.model_name} to {self.whisper_device}")
+            self.model = whisper.load_model(self.model_name, device=self.whisper_device)
+            logger.info(f"Whisper model {self.model_name} loaded successfully.")
         except Exception as e:
-            logger.error(f"加载Whisper模型失败: {e}")
-            raise Exception(f"无法加载Whisper模型: {e}")
-    
-    def transcribe(self, audio_path: str, language: str = "auto", 
-                   task: str = "transcribe") -> Dict[str, Any]:
-        """
-        转录音频文件 - 修复版，无需FFmpeg依赖
-        
-        Args:
-            audio_path: 音频文件路径
-            language: 音频语言 (auto表示自动检测)
-            task: 任务类型 (transcribe, translate)
-            
-        Returns:
-            包含转录结果的字典
-        """
-        if not os.path.exists(audio_path):
-            raise FileNotFoundError(f"音频文件不存在: {audio_path}")
-        
+            logger.error(f"Failed to load Whisper model: {e}")
+            raise Exception(f"Whisper model load failed: {e}")
+
+    def load_vit_gpt2_model(self):
+        vlm_model_id = "nlpconnect/vit-gpt2-image-captioning"
+        self.vlm_device = "cuda" if torch.cuda.is_available() else "cpu"
+        logger.info(f"Initializing ViT-GPT2 model '{vlm_model_id}' on device: {self.vlm_device}")
+
         try:
-            logger.info(f"开始转录音频: {audio_path}")
-            
-            # 直接使用Whisper加载音频文件（不依赖FFmpeg）
-            audio = self._load_audio_directly(audio_path)
-            
-            # 设置转录选项
-            options = {
-                "task": task,
-                "verbose": False
+            # 使用 ViTImageProcessor 替代 deprecated 的 ViTFeatureExtractor
+            self.vit_processor = ViTImageProcessor.from_pretrained(vlm_model_id)
+            self.gpt2_tokenizer = GPT2Tokenizer.from_pretrained(vlm_model_id)
+            self.vit_gpt2_model = VisionEncoderDecoderModel.from_pretrained(
+                vlm_model_id,
+                dtype=torch.float16 if self.vlm_device == "cuda" else torch.float32  # 使用 dtype 替代 torch_dtype
+            ).to(self.vlm_device)
+
+            # 处理 pad token 问题
+            if self.gpt2_tokenizer.pad_token is None:
+                self.gpt2_tokenizer.pad_token = self.gpt2_tokenizer.eos_token
+                logger.warning("Set pad_token to eos_token for GPT2Tokenizer")
+
+            logger.info("✅ ViT-GPT2 model and components loaded successfully.")
+        except Exception as e:
+            logger.error(f"ViT-GPT2 load failed: {e}")
+            self.vit_gpt2_model = None
+
+    def _get_segment_av_context(self, video_path: str, segment_start: float, segment_end: float) -> Dict[str, Any]:
+        """为单个字幕片段生成对应的AV上下文"""
+        # 计算片段中间时间戳（取中间点，避免场景过渡）
+        mid_timestamp = (segment_start + segment_end) / 2
+
+        # 提取该时间戳的视频帧
+        frame = video_processor.extract_frame_at_time(video_path, mid_timestamp)
+        if frame is None:
+            logger.warning(f"片段 {segment_start:.2f}s-{segment_end:.2f}s 无法提取帧，使用默认上下文")
+            return {
+                "environment": "未检测到",
+                "emotion": "未检测到",
+                "activity": "未检测到",
+                "description": "片段场景提取失败",
+                "timestamp": round(mid_timestamp, 2)
             }
-            
+
+        # 用ViT-GPT2生成场景信息
+        try:
+            # 图像预处理
+            pixel_values = self.vit_processor(
+                images=frame,
+                return_tensors="pt"
+            ).pixel_values.to(self.vlm_device, dtype=torch.float16 if self.vlm_device == "cuda" else torch.float32)
+
+            # 生成描述文本
+            gen_ids = self.vit_gpt2_model.generate(
+                pixel_values,
+                max_length=50,
+                num_beams=4,
+                early_stopping=True,
+                no_repeat_ngram_size=2
+            )
+            raw_desc = self.gpt2_tokenizer.batch_decode(gen_ids, skip_special_tokens=True)[0].strip()
+
+            # 结构化解析
+            return {
+                "environment": f"检测到: {self._parse_environment(raw_desc)}",
+                "emotion": f"推断: {self._parse_emotion(raw_desc)}",
+                "activity": f"推断: {self._parse_activity(raw_desc)}",
+                "description": raw_desc,
+                "timestamp": round(mid_timestamp, 2)
+            }
+        except Exception as e:
+            logger.error(f"片段 {segment_start:.2f}s-{segment_end:.2f} 场景解析失败：{e}")
+            return {
+                "environment": "未检测到",
+                "emotion": "未检测到",
+                "activity": "未检测到",
+                "description": f"场景解析错误：{str(e)[:30]}",
+                "timestamp": round(mid_timestamp, 2)
+            }
+
+    def transcribe(self, media_path: str, language: str = "auto", task: str = "transcribe",
+                   video_source_path: Optional[str] = None) -> Dict[str, Any]:
+        if not os.path.exists(media_path):
+            raise FileNotFoundError(f"Media file not found: {media_path}")
+
+        try:
+            logger.info(f"Starting transcription for: {media_path}")
+            audio = whisper.load_audio(media_path)
+            duration = len(audio) / whisper.audio.SAMPLE_RATE
+            # 视频路径优先用传入的 video_source_path，无则用 media_path（音频文件时无效）
+            video_path = video_source_path if video_source_path and os.path.exists(video_source_path) else media_path
+
+            # Whisper 转录配置
+            options = {"task": task}
             if language != "auto":
                 options["language"] = language
-            
-            # 执行转录
-            result = self.model.transcribe(audio, **options)
-            
-            logger.info(f"音频转录完成，耗时: {result.get('duration', 0):.2f}秒")
-            
+
+            logger.info("Executing Whisper transcription...")
+            self.model.to(self.whisper_device)
+            result = self.model.transcribe(media_path, **options)
+
+            # 整理字幕片段（为每个片段添加 av_context）
+            segments = []
+            for seg in result.get("segments", []):
+                segment_start = seg["start"]
+                segment_end = seg["end"]
+                # 为当前片段生成AV上下文（仅当视频路径有效时）
+                if video_path and video_path.lower().endswith((".mp4", ".avi", ".mov", ".mkv")):
+                    segment_av_ctx = self._get_segment_av_context(video_path, segment_start, segment_end)
+                else:
+                    segment_av_ctx = {
+                        "environment": "非视频文件", 
+                        "emotion": "非视频文件", 
+                        "activity": "非视频文件", 
+                        "description": "非视频文件无场景信息",
+                        "timestamp": 0.0
+                    }
+
+                segments.append({
+                    "start": segment_start,
+                    "end": segment_end,
+                    "text": seg["text"].strip(),
+                    "av_context": segment_av_ctx  # 每个片段绑定自己的场景信息
+                })
+
+            # 保留全局AV上下文（可选，用于前端展示整体场景）
+            global_av_ctx = self._get_av_context(video_path) if video_path else {}
+
             return {
-                "text": result["text"],
-                "segments": result["segments"],
-                "language": result.get("language", "unknown"),
-                "duration": result.get("duration", 0)
+                "text": result["text"].strip(),
+                "segments": segments,
+                "language": result["language"],
+                "duration": duration,
+                "av_context": global_av_ctx  # 全局场景（可选）
             }
-            
         except Exception as e:
-            logger.error(f"音频转录失败: {e}")
-            raise Exception(f"音频转录失败: {e}")
-    
-    def _load_audio_directly(self, audio_path: str):
-        """
-        直接加载音频文件，不依赖FFmpeg
-        
-        Args:
-            audio_path: 音频文件路径
-            
-        Returns:
-            音频数据
-        """
+            logger.error(f"Transcription failed: {e}")
+            raise Exception(f"Transcription error: {e}")
+
+    def _get_av_context(self, video_path: str) -> Dict[str, Any]:
+        """获取全局AV上下文（视频整体场景）"""
+        default_ctx = {
+            "environment": "未检测到", "person_count": "未检测到",
+            "main_speaker_location": "未检测到", "emotion": "未检测到",
+            "activity": "未检测到", "description": "AV 上下文提取失败"
+        }
+
+        if not self.vit_gpt2_model:
+            logger.warning("ViT-GPT2 not initialized, skipping global AV context.")
+            return default_ctx
+
+        logger.info(f"[AV-CTX] Getting global context for video: {video_path}")
+        # 提取视频中间帧作为全局场景代表
+        total_duration = self._get_video_duration(video_path)
+        if total_duration <= 0:
+            logger.warning("Cannot get video duration, using default frame.")
+            frame = self._extract_video_frame(video_path)
+        else:
+            frame = video_processor.extract_frame_at_time(video_path, total_duration / 2)
+
+        if frame is None:
+            logger.warning("[AV-CTX] No global frame extracted.")
+            default_ctx["description"] = "无法提取视频帧"
+            return default_ctx
+
         try:
-            # 尝试使用Whisper内置的音频加载功能
-            return whisper.load_audio(audio_path)
+            # 图像预处理
+            pixel_values = self.vit_processor(
+                images=frame,
+                return_tensors="pt"
+            ).pixel_values.to(self.vlm_device, dtype=torch.float16 if self.vlm_device == "cuda" else torch.float32)
+
+            # 生成描述文本
+            gen_ids = self.vit_gpt2_model.generate(
+                pixel_values,
+                max_length=50,
+                num_beams=4,
+                early_stopping=True,
+                no_repeat_ngram_size=2
+            )
+            raw_desc = self.gpt2_tokenizer.batch_decode(gen_ids, skip_special_tokens=True)[0].strip()
+
+            # 结构化解析
+            return {
+                "environment": f"检测到: {self._parse_environment(raw_desc)}",
+                "person_count": "未检测到",
+                "main_speaker_location": "未检测到",
+                "emotion": f"推断: {self._parse_emotion(raw_desc)}",
+                "activity": f"推断: {self._parse_activity(raw_desc)}",
+                "description": raw_desc
+            }
         except Exception as e:
-            logger.warning(f"Whisper内置音频加载失败: {e}")
-            
-            # 回退方案：手动读取WAV文件
-            try:
-                return self._load_wav_manually(audio_path)
-            except Exception as e2:
-                logger.error(f"手动音频加载也失败: {e2}")
-                raise Exception(f"无法加载音频文件，请确保文件格式正确: {e}")
-    
-    def _load_wav_manually(self, audio_path: str):
-        """
-        手动读取WAV文件
-        
-        Args:
-            audio_path: WAV文件路径
-            
-        Returns:
-            音频数据数组
-        """
-        import wave
-        import numpy as np
-        
-        with wave.open(audio_path, 'rb') as wav_file:
-            # 获取音频参数
-            channels = wav_file.getnchannels()
-            sample_width = wav_file.getsampwidth()
-            frame_rate = wav_file.getframerate()
-            n_frames = wav_file.getnframes()
-            
-            logger.info(f"WAV文件信息: {channels}通道, {sample_width}字节, {frame_rate}Hz, {n_frames}帧")
-            
-            # 读取音频数据
-            audio_data = wav_file.readframes(n_frames)
-            
-            # 转换为numpy数组
-            if sample_width == 1:  # 8位音频
-                audio_array = np.frombuffer(audio_data, dtype=np.uint8)
-                audio_array = audio_array.astype(np.float32) / 128.0 - 1.0
-            elif sample_width == 2:  # 16位音频
-                audio_array = np.frombuffer(audio_data, dtype=np.int16)
-                audio_array = audio_array.astype(np.float32) / 32768.0
+            logger.error(f"[AV-CTX] Global context extraction failed: {e}")
+            default_ctx["description"] = f"全局场景错误: {str(e)[:50]}"
+            return default_ctx
+
+    def _get_video_duration(self, video_path: str) -> float:
+        """获取视频时长（秒）"""
+        try:
+            cap = cv2.VideoCapture(video_path)
+            if not cap.isOpened():
+                return -1
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+            cap.release()
+            return frame_count / fps if fps > 0 else 0
+        except Exception as e:
+            logger.error(f"Failed to get video duration: {e}")
+            return -1
+
+    def _extract_video_frame(self, video_path: str, frame_idx: int = 0) -> Optional[np.ndarray]:
+        """提取视频指定索引的帧（备用方法）"""
+        try:
+            cap = cv2.VideoCapture(video_path)
+            if not cap.isOpened():
+                logger.error(f"Failed to open video: {video_path}")
+                return None
+
+            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+            ret, frame = cap.read()
+            cap.release()
+
+            if ret:
+                return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             else:
-                raise ValueError(f"不支持的采样宽度: {sample_width}")
-            
-            # 如果是立体声，转换为单声道
-            if channels > 1:
-                audio_array = audio_array.reshape(-1, channels)
-                audio_array = audio_array.mean(axis=1)
-            
-            # 重采样到16kHz（Whisper要求）
-            if frame_rate != 16000:
-                logger.info(f"重采样从 {frame_rate}Hz 到 16000Hz")
-                from scipy import signal
-                audio_array = signal.resample(audio_array, int(len(audio_array) * 16000 / frame_rate))
-            
-            return audio_array
-    
-    def get_supported_languages(self) -> Dict[str, str]:
-        """获取支持的语言列表"""
-        return whisper.tokenizer.LANGUAGES
-    
-    def detect_language(self, audio_path: str) -> str:
-        """
-        检测音频语言
-        
-        Args:
-            audio_path: 音频文件路径
-            
-        Returns:
-            语言代码
-        """
-        try:
-            # 加载音频
-            audio = self._load_audio_directly(audio_path)
-            
-            # 检测语言
-            language_probs = self.model.detect_language(audio)
-            detected_language = max(language_probs, key=language_probs.get)
-            
-            logger.info(f"检测到音频语言: {detected_language}")
-            return detected_language
-            
+                logger.warning(f"Failed to read frame {frame_idx} from video")
+                return None
         except Exception as e:
-            logger.error(f"语言检测失败: {e}")
-            return "unknown"
+            logger.error(f"Frame extraction failed: {e}")
+            return None
+
+    # 辅助方法：解析环境（室内/室外）
+    def _parse_environment(self, desc: str) -> str:
+        outdoor_keywords = ["outdoor", "outside", "park", "street", "beach", "forest", "yard", "garden", "field", "mountain"]
+        indoor_keywords = ["indoor", "inside", "room", "house", "office", "studio", "kitchen", "living room", "bedroom", "hall"]
+
+        desc_lower = desc.lower()
+        if any(kw in desc_lower for kw in outdoor_keywords):
+            return "室外"
+        elif any(kw in desc_lower for kw in indoor_keywords):
+            return "室内"
+        else:
+            # 基于常见场景推断（如“桌子前”默认室内）
+            return "室内" if any(kw in desc_lower for kw in ["table", "desk", "chair", "wall", "window"]) else "未知"
+
+    # 辅助方法：解析情感
+    def _parse_emotion(self, desc: str) -> str:
+        positive_keywords = ["smiling", "happy", "laughing", "excited", "joyful", "cheerful", "grinning", "delighted"]
+        calm_keywords = ["calm", "relaxed", "quiet", "still", "peaceful", "serene", "composed"]
+        negative_keywords = ["sad", "angry", "upset", "frowning", "frustrated", "crying", "mad"]
+
+        desc_lower = desc.lower()
+        if any(kw in desc_lower for kw in positive_keywords):
+            return "开心/兴奋"
+        elif any(kw in desc_lower for kw in calm_keywords):
+            return "平静/放松"
+        elif any(kw in desc_lower for kw in negative_keywords):
+            return "悲伤/愤怒"
+        else:
+            return "中性"
+
+    # 辅助方法：解析动作
+    def _parse_activity(self, desc: str) -> str:
+        talking_keywords = ["talking", "speaking", "discussing", "interview", "chatting", "conversing"]
+        action_keywords = ["holding", "using", "playing", "running", "walking", "skateboarding", "dancing", "eating", "drinking", "writing", "reading"]
+        static_keywords = ["standing", "sitting", "posing", "looking", "watching", "listening", "sleeping"]
+
+        desc_lower = desc.lower()
+        if any(kw in desc_lower for kw in talking_keywords):
+            return "交谈/说话"
+        elif any(kw in desc_lower for kw in action_keywords):
+            return "进行动作（持物/运动等）"
+        elif any(kw in desc_lower for kw in static_keywords):
+            return "静止状态（站立/坐姿等）"
+        else:
+            return "未知活动"
