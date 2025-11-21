@@ -1,0 +1,514 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NeuralSub | AI 字幕工作台</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#6366f1', // Indigo 500
+                        primary_hover: '#4f46e5', // Indigo 600
+                        dark_bg: '#0f172a', // Slate 900
+                        panel_bg: '#1e293b', // Slate 800
+                        accent: '#10b981', // Emerald 500
+                    },
+                    fontFamily: {
+                        mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', 'monospace'],
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        /* 玻璃拟态效果 */
+        .glass-panel {
+            background: rgba(30, 41, 59, 0.7);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+        }
+        /* 动画 */
+        @keyframes pulse-border {
+            0% { border-color: rgba(99, 102, 241, 0.4); box-shadow: 0 0 0 0 rgba(99, 102, 241, 0.2); }
+            70% { border-color: rgba(99, 102, 241, 0); box-shadow: 0 0 0 10px rgba(99, 102, 241, 0); }
+            100% { border-color: rgba(99, 102, 241, 0.4); box-shadow: 0 0 0 0 rgba(99, 102, 241, 0); }
+        }
+        .anim-pulse-border {
+            animation: pulse-border 2s infinite;
+        }
+        /* 滚动条美化 */
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: #0f172a; }
+        ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #6366f1; }
+    </style>
+</head>
+<body class="bg-dark_bg text-slate-200 min-h-screen font-sans selection:bg-primary selection:text-white overflow-x-hidden">
+
+    <nav class="border-b border-slate-800 bg-dark_bg/90 backdrop-blur-md fixed w-full z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex items-center justify-between h-16">
+                <div class="flex items-center gap-3">
+                    <i class="fa-solid fa-dna text-primary text-2xl"></i>
+                    <span class="font-bold text-xl tracking-tight text-white">Neural<span class="text-primary">Sub</span></span>
+                    <span class="text-[10px] uppercase tracking-wider bg-primary/20 text-primary px-2 py-0.5 rounded-full border border-primary/20 font-bold">Pro</span>
+                </div>
+                <div class="flex items-center gap-6">
+                    <div class="text-xs text-slate-400 flex items-center gap-2">
+                        <span class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
+                        系统在线
+                    </div>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <main class="pt-24 pb-12 px-4 max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-8">
+        
+        <div class="lg:col-span-7 space-y-6">
+            
+            <div class="glass-panel rounded-2xl p-1 transition-all duration-300 hover:shadow-lg hover:shadow-primary/10">
+                <div class="border-2 border-dashed border-slate-700 hover:border-primary rounded-xl bg-slate-900/50 p-8 text-center cursor-pointer transition-colors group relative" id="dropZone">
+                    <input type="file" id="fileInput" class="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-20" accept=".mp4,.mp3,.wav,.mkv,.flac,.m4a">
+                    
+                    <div id="uploadPrompt" class="space-y-4 pointer-events-none">
+                        <div class="w-16 h-16 bg-slate-800 rounded-full flex items-center justify-center mx-auto group-hover:scale-110 transition-transform duration-300 group-hover:bg-primary/20">
+                            <i class="fa-solid fa-cloud-arrow-up text-3xl text-slate-400 group-hover:text-primary transition-colors"></i>
+                        </div>
+                        <div>
+                            <h3 class="text-lg font-semibold text-white">点击或拖拽上传媒体文件</h3>
+                            <p class="text-slate-500 text-sm mt-1">支持 MP4, MKV, MP3, WAV (最大 500MB)</p>
+                        </div>
+                    </div>
+
+                    <div id="filePreview" class="hidden flex items-center justify-between bg-slate-800 p-4 rounded-lg border border-slate-600 relative z-10">
+                        <div class="flex items-center gap-4">
+                            <div class="w-10 h-10 rounded bg-primary/20 flex items-center justify-center text-primary">
+                                <i class="fa-solid fa-file-video"></i>
+                            </div>
+                            <div class="text-left">
+                                <p class="text-sm font-medium text-white truncate max-w-[200px]" id="fileName">video.mp4</p>
+                                <p class="text-xs text-slate-400" id="fileSize">0 MB</p>
+                            </div>
+                        </div>
+                        <button id="removeFileBtn" class="text-slate-400 hover:text-red-400 transition p-2 z-30">
+                            <i class="fa-solid fa-xmark"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="glass-panel rounded-2xl p-6 space-y-6">
+                <div class="flex items-center gap-2 pb-4 border-b border-slate-700">
+                    <i class="fa-solid fa-sliders text-primary"></i>
+                    <h3 class="font-semibold text-white">模型配置</h3>
+                </div>
+                
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div class="space-y-2">
+                        <label class="text-xs font-bold text-slate-400 uppercase tracking-wider">听写模型 (Whisper)</label>
+                        <select id="sourceLang" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-3 text-sm focus:border-primary focus:ring-1 focus:ring-primary outline-none transition text-white">
+                            <option value="auto">✨ 自动检测语言</option>
+                            <option value="en">🇺🇸 英语 (English)</option>
+                            <option value="zh">🇨🇳 中文 (Chinese)</option>
+                            <option value="ja">🇯🇵 日语 (Japanese)</option>
+                            <option value="ko">🇰🇷 韩语 (Korean)</option>
+                        </select>
+                    </div>
+                    
+                    <div class="space-y-2">
+                        <label class="text-xs font-bold text-slate-400 uppercase tracking-wider">翻译模型 (NLLB-200)</label>
+                        <select id="targetLang" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-3 text-sm focus:border-primary focus:ring-1 focus:ring-primary outline-none transition text-white">
+                            <option value="zh-cn">🇨🇳 简体中文</option>
+                            <option value="en">🇺🇸 英语</option>
+                            <option value="ja">🇯🇵 日语</option>
+                            <option value="ko">🇰🇷 韩语</option>
+                            <option value="fr">🇫🇷 法语</option>
+                            <option value="de">🇩🇪 德语</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="bg-slate-900/60 rounded-xl p-4 border border-slate-800 flex items-center justify-between group hover:border-primary/30 transition-colors">
+                    <div class="flex items-center gap-4">
+                        <div class="w-10 h-10 rounded-lg bg-gradient-to-br from-purple-500/20 to-primary/20 flex items-center justify-center border border-white/5">
+                            <i class="fa-solid fa-brain text-purple-400 group-hover:animate-pulse"></i>
+                        </div>
+                        <div>
+                            <div class="font-bold text-sm text-slate-200">Agentic Reflection (AI 反思模式)</div>
+                            <div class="text-xs text-slate-500 mt-0.5">使用 LLM 检查翻译语病并自动润色 (耗时增加 30%)</div>
+                        </div>
+                    </div>
+                    <label class="relative inline-flex items-center cursor-pointer">
+                        <input type="checkbox" id="useReflection" class="sr-only peer" checked>
+                        <div class="w-11 h-6 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary"></div>
+                    </label>
+                </div>
+
+                <button id="startBtn" disabled class="w-full group relative overflow-hidden bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-4 rounded-xl transition-all duration-300">
+                    <div class="absolute inset-0 w-full h-full bg-gradient-to-r from-primary to-purple-600 opacity-0 group-hover:opacity-100 group-enabled:opacity-100 transition-opacity duration-300"></div>
+                    <div class="relative flex items-center justify-center gap-2">
+                        <span id="btnText">开始智能处理</span>
+                        <i id="btnIcon" class="fa-solid fa-bolt"></i>
+                    </div>
+                </button>
+            </div>
+        </div>
+
+        <div class="lg:col-span-5 space-y-6 flex flex-col">
+            
+            <div class="glass-panel rounded-2xl p-6">
+                <h3 class="text-sm font-bold text-slate-400 uppercase tracking-wider mb-6">处理流水线</h3>
+                <div class="space-y-0 relative">
+                    <div class="absolute left-[19px] top-4 bottom-4 w-0.5 bg-slate-800"></div>
+                    
+                    <div class="relative flex items-start gap-4 step-item" id="step1">
+                        <div class="relative z-10 w-10 h-10 rounded-full bg-slate-900 border-2 border-slate-700 flex items-center justify-center transition-all duration-300 icon-box">
+                            <i class="fa-solid fa-file-audio text-slate-500 text-xs"></i>
+                        </div>
+                        <div class="pt-2">
+                            <h4 class="text-sm font-medium text-slate-400 transition-colors title">音频提取与预处理</h4>
+                            <p class="text-xs text-slate-600 mt-0.5">FFmpeg 16kHz 采样</p>
+                        </div>
+                    </div>
+
+                    <div class="relative flex items-start gap-4 step-item mt-6" id="step2">
+                        <div class="relative z-10 w-10 h-10 rounded-full bg-slate-900 border-2 border-slate-700 flex items-center justify-center transition-all duration-300 icon-box">
+                            <i class="fa-solid fa-wave-square text-slate-500 text-xs"></i>
+                        </div>
+                        <div class="pt-2">
+                            <h4 class="text-sm font-medium text-slate-400 transition-colors title">语音识别 (ASR)</h4>
+                            <p class="text-xs text-slate-600 mt-0.5">Whisper Base Model</p>
+                        </div>
+                    </div>
+
+                    <div class="relative flex items-start gap-4 step-item mt-6" id="step3">
+                        <div class="relative z-10 w-10 h-10 rounded-full bg-slate-900 border-2 border-slate-700 flex items-center justify-center transition-all duration-300 icon-box">
+                            <i class="fa-solid fa-language text-slate-500 text-xs"></i>
+                        </div>
+                        <div class="pt-2">
+                            <h4 class="text-sm font-medium text-slate-400 transition-colors title">神经机器翻译 (NMT)</h4>
+                            <p class="text-xs text-slate-600 mt-0.5">NLLB-200 Transformer</p>
+                        </div>
+                    </div>
+
+                    <div class="relative flex items-start gap-4 step-item mt-6" id="step4">
+                        <div class="relative z-10 w-10 h-10 rounded-full bg-slate-900 border-2 border-slate-700 flex items-center justify-center transition-all duration-300 icon-box">
+                            <i class="fa-solid fa-microchip text-slate-500 text-xs"></i>
+                        </div>
+                        <div class="pt-2">
+                            <h4 class="text-sm font-medium text-slate-400 transition-colors title">反思与生成</h4>
+                            <p class="text-xs text-slate-600 mt-0.5">LLM Review & Optimization</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="glass-panel rounded-2xl flex flex-col flex-1 min-h-[300px] overflow-hidden">
+                <div class="bg-slate-900 px-4 py-2 border-b border-slate-800 flex items-center justify-between">
+                    <div class="flex items-center gap-2 text-xs font-mono text-slate-400">
+                        <i class="fa-solid fa-terminal"></i>
+                        <span>sys_kernel.log</span>
+                    </div>
+                    <button onclick="clearLog()" class="text-xs text-slate-600 hover:text-slate-400">清除</button>
+                </div>
+                <div class="flex-1 bg-black/40 p-4 font-mono text-xs overflow-y-auto font-light leading-relaxed" id="consoleOutput">
+                    <div class="text-slate-500 mb-1">> System initialized.</div>
+                    <div class="text-slate-500 mb-1">> Waiting for user input...</div>
+                </div>
+            </div>
+
+            <div id="downloadArea" class="hidden glass-panel rounded-2xl p-6 border-l-4 border-l-accent bg-accent/5">
+                <!-- 这里的初始内容会被JS覆盖 -->
+                <div class="flex items-center justify-between">
+                    <div>
+                        <h3 class="font-bold text-white">🎉 处理完成</h3>
+                        <p class="text-xs text-slate-400 mt-1">耗时: <span id="timeCost" class="text-accent">0.0</span>s</p>
+                    </div>
+                    <a id="downloadLink" href="#" class="bg-accent hover:bg-emerald-400 text-slate-900 font-bold py-2.5 px-6 rounded-lg transition flex items-center gap-2 shadow-lg shadow-accent/20">
+                        <i class="fa-solid fa-download"></i> 下载字幕
+                    </a>
+                </div>
+            </div>
+
+        </div>
+    </main>
+
+    <script>
+        // 状态管理
+        let currentFile = null;
+        let isProcessing = false;
+        let processStartTime = 0;
+
+        // DOM 元素
+        const dropZone = document.getElementById('dropZone');
+        const fileInput = document.getElementById('fileInput');
+        const uploadPrompt = document.getElementById('uploadPrompt');
+        const filePreview = document.getElementById('filePreview');
+        const startBtn = document.getElementById('startBtn');
+        const consoleOutput = document.getElementById('consoleOutput');
+
+        // 工具函数：日志输出
+        function log(msg, type = 'info') {
+            const div = document.createElement('div');
+            div.className = 'mb-1 break-words animate-fade-in';
+            const time = new Date().toLocaleTimeString('en-US', {hour12: false});
+            
+            let colorClass = 'text-slate-300';
+            let prefix = 'INFO';
+            
+            if (type === 'error') { colorClass = 'text-red-400'; prefix = 'ERR'; }
+            else if (type === 'success') { colorClass = 'text-accent'; prefix = 'OK'; }
+            else if (type === 'warn') { colorClass = 'text-yellow-400'; prefix = 'WARN'; }
+            else if (type === 'system') { colorClass = 'text-primary'; prefix = 'SYS'; }
+
+            div.innerHTML = `<span class="opacity-30 mr-2">[${time}]</span><span class="${colorClass} font-bold mr-2">[${prefix}]</span><span class="${type === 'error' ? 'text-red-300' : 'text-slate-300'}">${msg}</span>`;
+            consoleOutput.appendChild(div);
+            consoleOutput.scrollTop = consoleOutput.scrollHeight;
+        }
+
+        function clearLog() {
+            consoleOutput.innerHTML = '<div class="text-slate-500 mb-1">> Log cleared.</div>';
+        }
+
+        // 文件处理逻辑
+        function handleFile(file) {
+            if (!file) return;
+            
+            // 验证大小 (500MB)
+            if (file.size > 500 * 1024 * 1024) {
+                log("文件过大 (Max 500MB)", 'error');
+                return;
+            }
+
+            currentFile = file;
+            document.getElementById('fileName').textContent = file.name;
+            document.getElementById('fileSize').textContent = (file.size / (1024 * 1024)).toFixed(2) + ' MB';
+            
+            uploadPrompt.classList.add('hidden');
+            filePreview.classList.remove('hidden');
+            startBtn.disabled = false;
+            startBtn.classList.remove('bg-slate-800');
+            
+            log(`文件已就绪: ${file.name}`, 'system');
+            document.getElementById('downloadArea').classList.add('hidden');
+        }
+
+        // 事件监听
+        fileInput.addEventListener('change', (e) => handleFile(e.target.files[0]));
+        
+        document.getElementById('removeFileBtn').addEventListener('click', (e) => {
+            e.stopPropagation(); // 防止触发 fileInput
+            currentFile = null;
+            fileInput.value = '';
+            uploadPrompt.classList.remove('hidden');
+            filePreview.classList.add('hidden');
+            startBtn.disabled = true;
+            startBtn.classList.add('bg-slate-800');
+            resetSteps();
+        });
+
+        // 更新步骤条状态
+        function updateStep(stepId, status) {
+            const step = document.getElementById(stepId);
+            const iconBox = step.querySelector('.icon-box');
+            const icon = step.querySelector('i');
+            const title = step.querySelector('.title');
+
+            // 重置
+            iconBox.className = 'relative z-10 w-10 h-10 rounded-full border-2 flex items-center justify-center transition-all duration-300 icon-box';
+            
+            if (status === 'active') {
+                iconBox.classList.add('border-primary', 'bg-slate-900', 'text-primary', 'anim-pulse-border');
+                title.classList.add('text-primary');
+                title.classList.remove('text-slate-400');
+            } else if (status === 'completed') {
+                iconBox.classList.add('border-accent', 'bg-accent', 'text-slate-900');
+                title.classList.add('text-accent');
+                title.classList.remove('text-slate-400', 'text-primary');
+                icon.className = 'fa-solid fa-check';
+            } else {
+                iconBox.classList.add('border-slate-700', 'bg-slate-900', 'text-slate-500');
+            }
+        }
+
+        function resetSteps() {
+            ['step1', 'step2', 'step3', 'step4'].forEach(id => {
+                const step = document.getElementById(id);
+                const iconBox = step.querySelector('.icon-box');
+                const icon = step.querySelector('i');
+                const title = step.querySelector('.title');
+                
+                iconBox.className = 'relative z-10 w-10 h-10 rounded-full bg-slate-900 border-2 border-slate-700 flex items-center justify-center transition-all duration-300 icon-box text-slate-500';
+                title.className = 'text-sm font-medium text-slate-400 transition-colors title';
+                
+                // 恢复原始图标
+                if(id === 'step1') icon.className = 'fa-solid fa-file-audio text-xs';
+                if(id === 'step2') icon.className = 'fa-solid fa-wave-square text-xs';
+                if(id === 'step3') icon.className = 'fa-solid fa-language text-xs';
+                if(id === 'step4') icon.className = 'fa-solid fa-microchip text-xs';
+            });
+        }
+
+        // 核心流程
+        startBtn.addEventListener('click', async () => {
+            if (isProcessing || !currentFile) return;
+            
+            isProcessing = true;
+            processStartTime = Date.now();
+            startBtn.disabled = true;
+            document.getElementById('btnText').textContent = "处理中...";
+            document.getElementById('btnIcon').className = "fa-solid fa-circle-notch fa-spin";
+            
+            resetSteps();
+            document.getElementById('downloadArea').classList.add('hidden');
+
+            try {
+                // Step 1: Upload
+                updateStep('step1', 'active');
+                log("正在上传文件到服务器...", 'system');
+                
+                const formData = new FormData();
+                formData.append('file', currentFile);
+                
+                const uploadRes = await fetch('/api/upload', { method: 'POST', body: formData });
+                const uploadData = await uploadRes.json();
+                
+                if (!uploadData.success) throw new Error(uploadData.error);
+                
+                log(`上传成功: ${uploadData.filename}`, 'success');
+                updateStep('step1', 'completed');
+
+                // Step 2: Transcribe
+                updateStep('step2', 'active');
+                log("加载 Whisper 模型进行转录...", 'system');
+                
+                const transcribeRes = await fetch('/api/transcribe', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        file_path: uploadData.file_path,
+                        language: document.getElementById('sourceLang').value
+                    })
+                });
+                const transcribeData = await transcribeRes.json();
+                
+                if (!transcribeData.success) throw new Error(transcribeData.error);
+                
+                log(`转录完成. 识别到语言: ${transcribeData.language}, 片段数: ${transcribeData.segments.length}`, 'success');
+                updateStep('step2', 'completed');
+
+                // Step 3 & 4: Translate (Integrates Reflection)
+                updateStep('step3', 'active');
+                if (document.getElementById('useReflection').checked) {
+                    updateStep('step4', 'active'); // 同时激活反思步骤UI
+                }
+                
+                log(`启动 NLLB-200 神经翻译 (Target: ${document.getElementById('targetLang').value})...`, 'system');
+                
+                const translateRes = await fetch('/api/translate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        segments: transcribeData.segments,
+                        target_language: document.getElementById('targetLang').value,
+                        source_language: transcribeData.language,
+                        use_reflection: document.getElementById('useReflection').checked
+                    })
+                });
+                const translateData = await translateRes.json();
+                
+                if (!translateData.success) throw new Error(translateData.error);
+                
+                log("翻译与AI反思优化完成", 'success');
+                updateStep('step3', 'completed');
+                updateStep('step4', 'completed');
+
+                // ---------------------------------------------------------
+                // Step 5: 生成双语字幕 (Generate Dual Subtitles)
+                // ---------------------------------------------------------
+                log("正在生成双语字幕文件...", 'system');
+
+                // 1. 生成原文未翻译字幕 (Original)
+                const genOriginalRes = await fetch('/api/generate-subtitle', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        segments: transcribeData.segments, // 原始片段
+                        format: 'srt',
+                        filename: currentFile.name,
+                        suffix: 'original' // 后缀: _original
+                    })
+                });
+                const genOriginalData = await genOriginalRes.json();
+
+                // 2. 生成已翻译字幕 (Translated)
+                const genTransRes = await fetch('/api/generate-subtitle', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        segments: translateData.segments, // 翻译后片段
+                        format: 'srt',
+                        filename: currentFile.name,
+                        suffix: 'translated' // 后缀: _translated
+                    })
+                });
+                const genTransData = await genTransRes.json();
+
+                // ---------------------------------------------------------
+                // 完成与显示 (Finish)
+                // ---------------------------------------------------------
+                const duration = ((Date.now() - processStartTime) / 1000).toFixed(1);
+                // document.getElementById('timeCost').textContent = duration; // 被覆盖了，不需要
+                
+                const downloadArea = document.getElementById('downloadArea');
+                
+                // 创建原文按钮
+                const btnOrg = `
+                    <a href="${genOriginalData.download_url}" class="flex-1 bg-slate-700 hover:bg-slate-600 text-white font-bold py-2.5 px-4 rounded-lg transition flex items-center justify-center gap-2 shadow-lg">
+                        <i class="fa-solid fa-file-lines"></i> 下载原文
+                    </a>`;
+                
+                // 创建译文按钮
+                const btnTrans = `
+                    <a href="${genTransData.download_url}" class="flex-1 bg-accent hover:bg-emerald-400 text-slate-900 font-bold py-2.5 px-4 rounded-lg transition flex items-center justify-center gap-2 shadow-lg shadow-accent/20">
+                        <i class="fa-solid fa-language"></i> 下载译文
+                    </a>`;
+
+                // 替换 HTML 结构
+                downloadArea.innerHTML = `
+                    <div class="flex flex-col gap-4">
+                        <div class="flex items-center justify-between">
+                            <div>
+                                <h3 class="font-bold text-white">🎉 处理完成</h3>
+                                <p class="text-xs text-slate-400 mt-1">耗时: <span class="text-accent">${duration}</span>s</p>
+                            </div>
+                        </div>
+                        <div class="flex gap-4">
+                             ${btnOrg}
+                             ${btnTrans}
+                        </div>
+                    </div>
+                `;
+                
+                downloadArea.classList.remove('hidden');
+                log(`🎉 全部流程结束! 原文与译文已生成`, 'success');
+
+            } catch (err) {
+                log(`流程终止: ${err.message}`, 'error');
+                alert(`发生错误: ${err.message}`);
+            } finally {
+                isProcessing = false;
+                startBtn.disabled = false;
+                document.getElementById('btnText').textContent = "开始智能处理";
+                document.getElementById('btnIcon').className = "fa-solid fa-bolt";
+            }
+        });
+    </script>
+</body>
+</html>

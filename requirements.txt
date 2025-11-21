@@ -1,0 +1,33 @@
+flask==2.3.3
+flask-cors==4.0.0
+openai==1.3.5
+openai-whisper==20231117
+requests==2.31.0
+pydub==0.25.1
+ffmpeg-python==0.2.0
+srt==3.5.3
+# webvtt-py==0.4.6  # 暂时移除，避免编译问题
+python-dotenv==1.0.0
+flask==2.3.3
+flask-cors==4.0.0
+openai==1.3.5
+openai-whisper==20231117
+requests==2.31.0
+pydub==0.25.1
+ffmpeg-python==0.2.0
+srt==3.5.3
+# webvtt-py==0.4.6  # 暂时移除，避免编译问题
+python-dotenv==1.0.0
+# googletrans==4.0.1  # 有兼容性问题
+google-trans-new
+edge-tts==6.1.10
+numpy==1.24.3
+torch==2.0.1
+torchaudio==2.0.2
+sentence-transformers
+faster-whisper==0.10.0
+transformers>=4.35.0
+accelerate>=0.25.0
+sentencepiece>=0.1.99
+sacremoses
+protobuf

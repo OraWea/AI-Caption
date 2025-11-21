@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI字幕系统 - 调试测试</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .test-section { margin: 20px 0; padding: 15px; border: 1px solid #ccc; border-radius: 5px; }
+        .success { color: green; }
+        .error { color: red; }
+        .warning { color: orange; }
+        #log { background: #f5f5f5; padding: 10px; border-radius: 5px; max-height: 300px; overflow-y: auto; }
+    </style>
+</head>
+<body>
+    <h1>AI字幕系统 - 前端调试测试</h1>
+    
+    <div class="test-section">
+        <h2>基础功能测试</h2>
+        <button onclick="testBasicFunctions()">运行基础测试</button>
+        <div id="basic-test-results"></div>
+    </div>
+    
+    <div class="test-section">
+        <h2>API连接测试</h2>
+        <button onclick="testAPIConnection()">测试API连接</button>
+        <div id="api-test-results"></div>
+    </div>
+    
+    <div class="test-section">
+        <h2>文件上传测试</h2>
+        <input type="file" id="test-file" accept=".wav,.mp3,.mp4">
+        <button onclick="testFileUpload()">测试文件上传</button>
+        <div id="upload-test-results"></div>
+    </div>
+    
+    <div class="test-section">
+        <h2>日志输出</h2>
+        <div id="log"></div>
+        <button onclick="clearLog()">清空日志</button>
+    </div>
+
+    <script>
+        function log(message, type = 'info') {
+            const logDiv = document.getElementById('log');
+            const timestamp = new Date().toLocaleTimeString();
+            const className = type === 'error' ? 'error' : type === 'success' ? 'success' : 'warning';
+            logDiv.innerHTML += `<div class="${className}">[${timestamp}] ${message}</div>`;
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+        
+        function clearLog() {
+            document.getElementById('log').innerHTML = '';
+        }
+        
+        async function testBasicFunctions() {
+            const results = document.getElementById('basic-test-results');
+            results.innerHTML = '';
+            
+            try {
+                log('开始基础功能测试...');
+                
+                // 测试基本DOM元素
+                const elements = [
+                    'upload-area', 'file-input', 'start-transcription',
+                    'start-translation', 'download-subtitle', 'subtitle-format'
+                ];
+                
+                elements.forEach(id => {
+                    const element = document.getElementById(id);
+                    if (element) {
+                        log(`✓ 找到元素: ${id}`);
+                        results.innerHTML += `<div class="success">✓ ${id}</div>`;
+                    } else {
+                        log(`✗ 缺失元素: ${id}`, 'error');
+                        results.innerHTML += `<div class="error">✗ ${id}</div>`;
+                    }
+                });
+                
+                // 测试基本JavaScript功能
+                log('测试JavaScript功能...');
+                
+                // 测试数组和对象
+                const testArray = [1, 2, 3];
+                const testObject = { key: 'value' };
+                
+                if (Array.isArray(testArray) && typeof testObject === 'object') {
+                    log('✓ 基本JavaScript功能正常');
+                    results.innerHTML += '<div class="success">✓ JavaScript功能</div>';
+                }
+                
+                // 测试异步函数
+                const testAsync = async () => {
+                    return new Promise(resolve => setTimeout(() => resolve('success'), 100));
+                };
+                
+                const result = await testAsync();
+                if (result === 'success') {
+                    log('✓ 异步函数正常');
+                    results.innerHTML += '<div class="success">✓ 异步函数</div>';
+                }
+                
+                log('基础功能测试完成', 'success');
+                
+            } catch (error) {
+                log(`基础测试错误: ${error.message}`, 'error');
+                results.innerHTML += `<div class="error">错误: ${error.message}</div>`;
+            }
+        }
+        
+        async function testAPIConnection() {
+            const results = document.getElementById('api-test-results');
+            results.innerHTML = '';
+            
+            try {
+                log('开始API连接测试...');
+                
+                // 测试语言列表API
+                log('测试语言列表API...');
+                const response = await fetch('/api/languages');
+                log(`响应状态: ${response.status}`);
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    log(`✓ 语言列表API正常，数据: ${Object.keys(data).length} 个类别`);
+                    results.innerHTML += '<div class="success">✓ 语言列表API</div>';
+                    
+                    // 显示一些语言数据
+                    if (data.whisper_languages) {
+                        const languages = Object.keys(data.whisper_languages).slice(0, 5);
+                        log(`示例语言: ${languages.join(', ')}`);
+                    }
+                } else {
+                    log(`✗ 语言列表API失败: ${response.status}`, 'error');
+                    results.innerHTML += `<div class="error">✗ 语言列表API: ${response.status}</div>`;
+                }
+                
+                // 测试其他API端点
+                log('测试其他API端点...');
+                
+                const endpoints = ['/api/upload', '/api/transcribe', '/api/translate'];
+                
+                for (const endpoint of endpoints) {
+                    try {
+                        const testResponse = await fetch(endpoint, { method: 'OPTIONS' });
+                        log(`✓ ${endpoint} 可访问`);
+                        results.innerHTML += `<div class="success">✓ ${endpoint}</div>`;
+                    } catch (error) {
+                        log(`⚠️ ${endpoint} 可能有问题: ${error.message}`, 'warning');
+                        results.innerHTML += `<div class="warning">⚠️ ${endpoint}</div>`;
+                    }
+                }
+                
+                log('API连接测试完成', 'success');
+                
+            } catch (error) {
+                log(`API测试错误: ${error.message}`, 'error');
+                results.innerHTML += `<div class="error">错误: ${error.message}</div>`;
+            }
+        }
+        
+        async function testFileUpload() {
+            const results = document.getElementById('upload-test-results');
+            results.innerHTML = '';
+            
+            try {
+                const fileInput = document.getElementById('test-file');
+                const file = fileInput.files[0];
+                
+                if (!file) {
+                    log('请选择测试文件', 'warning');
+                    results.innerHTML += '<div class="warning">请选择文件</div>';
+                    return;
+                }
+                
+                log(`开始测试文件上传: ${file.name} (${file.size} 字节)`);
+                
+                const formData = new FormData();
+                formData.append('file', file);
+                
+                log('发送上传请求...');
+                const response = await fetch('/api/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                log(`上传响应状态: ${response.status}`);
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    log(`✓ 文件上传成功: ${data.filename}`);
+                    log(`  文件路径: ${data.file_path}`);
+                    results.innerHTML += `<div class="success">✓ 上传成功: ${data.filename}</div>`;
+                    
+                    // 测试转录
+                    log('测试音频转录...');
+                    const transcribeResponse = await fetch('/api/transcribe', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            file_path: data.file_path,
+                            language: 'auto'
+                        })
+                    });
+                    
+                    if (transcribeResponse.ok) {
+                        const transcribeData = await transcribeResponse.json();
+                        log(`✓ 音频转录成功，段落数: ${transcribeData.segments?.length || 0}`);
+                        results.innerHTML += `<div class="success">✓ 转录成功: ${transcribeData.segments?.length || 0} 段</div>`;
+                        
+                        if (transcribeData.segments && transcribeData.segments.length > 0) {
+                            // 测试翻译
+                            log('测试字幕翻译...');
+                            const translateResponse = await fetch('/api/translate', {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/json'
+                                },
+                                body: JSON.stringify({
+                                    segments: transcribeData.segments.slice(0, 2), // 只翻译前2段
+                                    target_language: 'zh-cn',
+                                    source_language: transcribeData.language
+                                })
+                            });
+                            
+                            if (translateResponse.ok) {
+                                const translateData = await translateResponse.json();
+                                log(`✓ 字幕翻译成功: ${translateData.segments?.length || 0} 段`);
+                                results.innerHTML += `<div class="success">✓ 翻译成功: ${translateData.segments?.length || 0} 段</div>`;
+                            } else {
+                                log(`⚠️ 字幕翻译失败: ${translateResponse.status}`, 'warning');
+                                results.innerHTML += `<div class="warning">⚠️ 翻译失败: ${translateResponse.status}</div>`;
+                            }
+                        } else {
+                            log('⚠️ 没有检测到语音段落', 'warning');
+                            results.innerHTML += '<div class="warning">⚠️ 没有语音段落</div>';
+                        }
+                    } else {
+                        log(`⚠️ 音频转录失败: ${transcribeResponse.status}`, 'warning');
+                        results.innerHTML += `<div class="warning">⚠️ 转录失败: ${transcribeResponse.status}</div>`;
+                    }
+                } else {
+                    const errorText = await response.text();
+                    log(`✗ 文件上传失败: ${response.status} - ${errorText}`, 'error');
+                    results.innerHTML += `<div class="error">✗ 上传失败: ${response.status}</div>`;
+                }
+                
+            } catch (error) {
+                log(`文件上传测试错误: ${error.message}`, 'error');
+                results.innerHTML += `<div class="error">错误: ${error.message}</div>`;
+            }
+        }
+        
+        // 页面加载时自动运行基础测试
+        window.addEventListener('load', () => {
+            log('调试测试页面加载完成');
+            testBasicFunctions();
+        });
+        
+        // 全局错误处理
+        window.addEventListener('error', (event) => {
+            log(`全局错误: ${event.message} (${event.filename}:${event.lineno}:${event.colno})`, 'error');
+        });
+        
+        window.addEventListener('unhandledrejection', (event) => {
+            log(`未处理的Promise拒绝: ${event.reason}`, 'error');
+        });
+    </script>
+</body>
+</html>
